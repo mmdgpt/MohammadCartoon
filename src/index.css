@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif;
+    background-color: #EFECE4;
+    color: #1C1917;
+    overflow-x: hidden;
+  }
+}
+
+.font-mono-tech {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle halftone corner grid pattern matching the Hexano smart catalog aesthetic in warm light kraft tones */
+.catalog-corner-pattern-tr {
+  background-image: radial-gradient(#C8B69E 1.5px, transparent 1.5px);
+  background-size: 8px 8px;
+  mask-image: radial-gradient(circle at top right, rgba(0,0,0,0.45) 0%, transparent 72%);
+  -webkit-mask-image: radial-gradient(circle at top right, rgba(0,0,0,0.45) 0%, transparent 72%);
+}
+
+.catalog-corner-pattern-bl {
+  background-image: radial-gradient(#C8B69E 1.5px, transparent 1.5px);
+  background-size: 8px 8px;
+  mask-image: radial-gradient(circle at bottom left, rgba(0,0,0,0.45) 0%, transparent 72%);
+  -webkit-mask-image: radial-gradient(circle at bottom left, rgba(0,0,0,0.45) 0%, transparent 72%);
+}
+
+/* Custom subtle scrollbars for tables and modals */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F5F2EB;
+}
+::-webkit-scrollbar-thumb {
+  background: #D6CFC2;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B45309;
+}
+
+@keyframes catalogPageEnter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.992);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.catalog-page-transition {
+  animation: catalogPageEnter 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catalog-page-transition {
+    animation: none;
+  }
+}
+
+.print-book-root {
+  display: none;
+}
+
+.pp {
+  width: 486px;
+  height: 864px;
+  aspect-ratio: 9 / 16;
+  position: relative;
+  overflow: hidden;
+  direction: rtl;
+}
+
+@media print {
+  @page {
+    size: 486px 864px;
+    margin: 0px;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #FAF8F3 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  #printroot {
+    display: block !important;
+  }
+
+  .pp {
+    width: 486px !important;
+    height: 864px !important;
+    aspect-ratio: 9 / 16 !important;
+    break-after: page;
+    page-break-after: always;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+    border: none !important;
+  }
+
+  .pp *,
+  .pp ::before,
+  .pp ::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+}
+
+
