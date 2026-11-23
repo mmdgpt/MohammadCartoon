@@ -6,6 +6,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Download,
+  FileCode2,
   Maximize2,
   Minimize2,
   Share2,
@@ -46,6 +47,7 @@ import {
   AdminPanelModal,
 } from './components/AdminPanelModal';
 import { PrintCatalogBook } from './components/PrintCatalogBook';
+import { CatalogSheetViewport } from './components/CatalogSheetViewport';
 
 export default function App() {
   const [hash, setHash] = useState<string>(() => {
@@ -68,6 +70,7 @@ export default function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastKind, setToastKind] = useState<'pdf' | 'html' | 'saved' | null>(null);
   const [fullTableProduct, setFullTableProduct] = useState<CatalogProduct | null>(null);
   const [specsModalProduct, setSpecsModalProduct] = useState<CatalogProduct | null>(null);
   const [orderModalState, setOrderModalState] = useState<{
@@ -116,47 +119,58 @@ export default function App() {
     }
   }, []);
 
-  const handleUpdateCatalogState = useCallback((nextState: CatalogCustomState) => {
-    setCatalogState(nextState);
-    saveCatalogState(nextState);
-    setPdfVersion(Date.now());
-    setIsUpdatingPdf(true);
-    void fetch('/api/catalog-state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ catalogState: nextState }),
-    })
-      .finally(() => {
+  const handleSaveCatalogState = useCallback(
+    async (nextState: CatalogCustomState): Promise<{ pdfUpdated: boolean }> => {
+      setCatalogState(nextState);
+      saveCatalogState(nextState);
+      setIsUpdatingPdf(true);
+      try {
+        const res = await fetch('/api/catalog-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ catalogState: nextState, rebuildNow: true }),
+        });
+        const data = res.ok ? await res.json().catch(() => null) : null;
+        setPdfVersion(data?.lastGeneratedAt || Date.now());
+        setToastKind('saved');
+        setToastMessage('تغییرات همزمان روی اپلیکیشن، نسخه PDF و فایل HTML آفلاین ذخیره شد.');
         setTimeout(() => {
-          setIsUpdatingPdf(false);
-          setPdfVersion(Date.now());
-        }, 1200);
-      })
-      .catch(() => {});
-  }, []);
+          setToastMessage(null);
+          setToastKind(null);
+        }, 4500);
+        return { pdfUpdated: Boolean(data?.pdfUpdated ?? res.ok) };
+      } catch {
+        setPdfVersion(Date.now());
+        return { pdfUpdated: false };
+      } finally {
+        setIsUpdatingPdf(false);
+      }
+    },
+    []
+  );
 
-  const handleResetCatalogState = useCallback(() => {
+  const handleResetCatalogState = useCallback(async (): Promise<CatalogCustomState> => {
     const defaults = resetCatalogState();
     setCatalogState(defaults);
-    setPdfVersion(Date.now());
     setIsUpdatingPdf(true);
-    void fetch('/api/catalog-state', {
-      method: 'DELETE',
-    })
-      .finally(() => {
-        setTimeout(() => {
-          setIsUpdatingPdf(false);
-          setPdfVersion(Date.now());
-        }, 1200);
-      })
-      .catch(() => {});
+    try {
+      const res = await fetch('/api/catalog-state?rebuildNow=1', {
+        method: 'DELETE',
+      });
+      const data = res.ok ? await res.json().catch(() => null) : null;
+      setPdfVersion(data?.lastGeneratedAt || Date.now());
+    } catch {
+      setPdfVersion(Date.now());
+    } finally {
+      setIsUpdatingPdf(false);
+    }
+    return defaults;
   }, []);
 
   const navigate = useCallback((nextHash: string) => {
     if (typeof window !== 'undefined') {
       window.location.hash = nextHash;
       setHash(nextHash);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, []);
 
@@ -171,9 +185,20 @@ export default function App() {
   };
 
   const handleDownloadPdf = () => {
+    setToastKind('pdf');
     setToastMessage('فایل PDF تعاملی کاتالوگ (شامل تمام صفحات با قابلیت کلیک) در حال دانلود است…');
     setTimeout(() => {
       setToastMessage(null);
+      setToastKind(null);
+    }, 6000);
+  };
+
+  const handleDownloadOfflineHtml = () => {
+    setToastKind('html');
+    setToastMessage('فایل HTML آفلاین و تعاملی کاتالوگ (تک‌فایلی و قابل کلیک بدون نیاز به اینترنت) در حال دانلود است…');
+    setTimeout(() => {
+      setToastMessage(null);
+      setToastKind(null);
     }, 6000);
   };
 
@@ -188,6 +213,17 @@ export default function App() {
   const isPrintPreviewMode =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('print') === '1';
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (isPrintPreviewMode) {
+      document.documentElement.classList.add('print-preview-mode');
+      document.body.classList.add('print-preview-mode');
+    } else {
+      document.documentElement.classList.remove('print-preview-mode');
+      document.body.classList.remove('print-preview-mode');
+    }
+  }, [isPrintPreviewMode]);
 
   if (isPrintPreviewMode) {
     return <PrintCatalogBook visibleOnScreen catalogState={catalogState} />;
@@ -209,10 +245,10 @@ export default function App() {
   return (
     <div
       dir="rtl"
-      className="min-h-screen bg-[#EFECE4] text-[#1C1917] flex flex-col justify-between relative overflow-x-hidden"
+      className="h-dvh w-screen bg-[#EFECE4] text-[#1C1917] flex flex-col justify-between relative overflow-hidden overscroll-none"
     >
       {/* Top Workspace Utility Bar */}
-      <header className="no-print w-full max-w-[1400px] mx-auto px-4 sm:px-6 pt-3 pb-2 flex flex-wrap items-center justify-between gap-3">
+      <header className="no-print shrink-0 w-full max-w-[1400px] mx-auto px-4 sm:px-6 pt-3 pb-2 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xs sm:text-sm font-extrabold text-[#1C1917] tracking-tight whitespace-nowrap inline-flex items-center">
           {catalogState.elements.headerTitle}
           <span className="font-normal text-[#78716C] mx-1.5">·</span>
@@ -258,6 +294,19 @@ export default function App() {
           >
             <Download className="w-3.5 h-3.5" />
             <span>{isUpdatingPdf ? 'بروزرسانی PDF…' : 'دانلود PDF'}</span>
+          </a>
+
+          <a
+            id="bhtml"
+            href={`/mohammad-carton-catalog.html?v=${pdfVersion}`}
+            download="کاتالوگ-آفلاین-کارتن-محمد.html"
+            onClick={handleDownloadOfflineHtml}
+            aria-label="دانلود HTML آفلاین"
+            title="دانلود کاتالوگ کامل در قالب یک فایل HTML آفلاین و کاملاً تعاملی (قابل ارائه و کلیک بدون نیاز به اینترنت)"
+            className="h-9 px-3.5 rounded-xl bg-white hover:bg-[#FFFBEB] border border-[#E2D8C5] text-[#92400E] text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <FileCode2 className="w-3.5 h-3.5" />
+            <span>دانلود HTML آفلاین</span>
           </a>
 
           <button
@@ -306,84 +355,65 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Centered Interactive Catalog Sheet — 9:16 Vertical Aspect Ratio */}
-      <main className="no-print flex-1 flex items-center justify-center px-3 sm:px-6 py-2 sm:py-3">
-        <div
-          data-testid="smart-catalog-sheet"
-          style={{ aspectRatio: '9 / 16' }}
-          className="w-full max-w-[486px] aspect-[9/16] bg-gradient-to-b from-[#FAF8F3] via-[#F7F3EA] to-[#F3EDE0] border border-[#E2D8C5] rounded-[30px] shadow-[0_24px_60px_rgba(68,46,22,0.12)] relative overflow-hidden"
-        >
-          {/* Decorative halftone dot grid corners */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute top-0 right-0 w-44 h-44 catalog-corner-pattern-tr"
+      {/* Main Centered Interactive Catalog Sheet — 9:16 Fixed-Viewport Non-Scrollable Canvas */}
+      <CatalogSheetViewport routeKey={routeKey}>
+        {route.page === 'cover' && (
+          <CoverPage onNavigate={navigate} catalogState={catalogState} />
+        )}
+
+        {route.page === 'menu' && (
+          <MenuPage
+            onNavigate={navigate}
+            onOpenSearch={() => setIsSearchOpen(true)}
+            catalogState={catalogState}
           />
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute bottom-0 left-0 w-44 h-44 catalog-corner-pattern-bl"
+        )}
+
+        {route.page === 'groups' && (
+          <GroupsPage onNavigate={navigate} catalogState={catalogState} />
+        )}
+
+        {route.page === 'group-detail' && (
+          <GroupDetailPage
+            groupId={route.groupId}
+            pageNum={route.pageNum}
+            onNavigate={navigate}
+            catalogState={catalogState}
           />
+        )}
 
-          {/* Animated Page Transitions */}
-          <div key={routeKey} className="w-full h-full catalog-page-transition">
-            {route.page === 'cover' && (
-              <CoverPage onNavigate={navigate} catalogState={catalogState} />
-            )}
-
-            {route.page === 'menu' && (
-              <MenuPage
-                onNavigate={navigate}
-                onOpenSearch={() => setIsSearchOpen(true)}
-                catalogState={catalogState}
-              />
-            )}
-
-            {route.page === 'groups' && (
+        {route.page === 'product' && (() => {
+          const product = getProductById(
+            route.productId,
+            catalogState.products
+          );
+          if (!product) {
+            return (
               <GroupsPage onNavigate={navigate} catalogState={catalogState} />
-            )}
-
-            {route.page === 'group-detail' && (
-              <GroupDetailPage
-                groupId={route.groupId}
-                pageNum={route.pageNum}
-                onNavigate={navigate}
-                catalogState={catalogState}
-              />
-            )}
-
-            {route.page === 'product' && (() => {
-              const product = getProductById(
-                route.productId,
-                catalogState.products
-              );
-              if (!product) {
-                return (
-                  <GroupsPage onNavigate={navigate} catalogState={catalogState} />
-                );
+            );
+          }
+          return (
+            <ProductDetailPage
+              product={product}
+              onNavigate={navigate}
+              onOpenFullTable={(p) => setFullTableProduct(p)}
+              onOpenSpecsModal={(p) => setSpecsModalProduct(p)}
+              onOpenOrderModal={(p, vId) =>
+                setOrderModalState({ product: p, variantId: vId })
               }
-              return (
-                <ProductDetailPage
-                  product={product}
-                  onNavigate={navigate}
-                  onOpenFullTable={(p) => setFullTableProduct(p)}
-                  onOpenSpecsModal={(p) => setSpecsModalProduct(p)}
-                  onOpenOrderModal={(p, vId) =>
-                    setOrderModalState({ product: p, variantId: vId })
-                  }
-                  catalogState={catalogState}
-                />
-              );
-            })()}
+              catalogState={catalogState}
+            />
+          );
+        })()}
 
-            {route.page === 'about' && (
-              <AboutPage onNavigate={navigate} catalogState={catalogState} />
-            )}
+        {route.page === 'about' && (
+          <AboutPage onNavigate={navigate} catalogState={catalogState} />
+        )}
 
-            {route.page === 'contact' && (
-              <ContactPage onNavigate={navigate} catalogState={catalogState} />
-            )}
-          </div>
-        </div>
-      </main>
+        {route.page === 'contact' && (
+          <ContactPage onNavigate={navigate} catalogState={catalogState} />
+        )}
+      </CatalogSheetViewport>
 
       {/* Toast Notification */}
       <div
@@ -399,21 +429,34 @@ export default function App() {
         <span>{toastMessage || 'در حال آماده‌سازی PDF؛ چند لحظه صبر کنید…'}</span>
         {toastMessage && (
           <div className="flex items-center gap-1.5">
-            <a
-              href={`/mohammad-carton-catalog.pdf?v=${pdfVersion}&inline=1`}
-              target="_blank"
-              rel="noreferrer"
-              className="px-2.5 py-1 rounded-lg bg-[#B45309] hover:bg-[#92400E] text-white text-[11px] font-bold whitespace-nowrap"
-            >
-              باز کردن در تب جدید
-            </a>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap"
-            >
-              چاپ / ذخیره از مرورگر
-            </button>
+            {toastKind === 'html' ? (
+              <a
+                href={`/mohammad-carton-catalog.html?v=${pdfVersion}&inline=1`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-2.5 py-1 rounded-lg bg-[#B45309] hover:bg-[#92400E] text-white text-[11px] font-bold whitespace-nowrap"
+              >
+                پیش‌نمایش در تب جدید
+              </a>
+            ) : (
+              <>
+                <a
+                  href={`/mohammad-carton-catalog.pdf?v=${pdfVersion}&inline=1#view=Fit&toolbar=0&navpanes=0&scrollbar=0`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-[#B45309] hover:bg-[#92400E] text-white text-[11px] font-bold whitespace-nowrap"
+                >
+                  باز کردن در تب جدید
+                </a>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                >
+                  چاپ / ذخیره از مرورگر
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -467,7 +510,7 @@ export default function App() {
           isOpen={isAdminPanelOpen}
           onClose={() => setIsAdminPanelOpen(false)}
           catalogState={catalogState}
-          onUpdateState={handleUpdateCatalogState}
+          onSaveState={handleSaveCatalogState}
           onResetState={handleResetCatalogState}
           onLogout={() => {
             setIsAdminAuthenticated(false);

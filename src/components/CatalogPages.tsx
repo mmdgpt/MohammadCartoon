@@ -96,7 +96,7 @@ export const CoverPage: React.FC<CoverPageProps> = ({
   const { cover, logoUrl } = catalogState.elements;
 
   return (
-    <div className="flex flex-col justify-between h-full w-full px-6 pb-5 pt-0 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full px-6 pb-5 pt-0 relative z-10 text-right overflow-hidden overscroll-none">
       {/* Top Row: Back button + Sculpted Brand Tab */}
       <div className="relative flex items-start justify-center pt-0 shrink-0">
         <button
@@ -233,7 +233,7 @@ export const MenuPage: React.FC<MenuPageProps> = ({
   const { menu, logoUrl } = catalogState.elements;
 
   return (
-    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-hidden overscroll-none">
       <InternalCatalogHeader
         onBack={() => onNavigate('#/cover')}
         showMenuButton={false}
@@ -354,7 +354,7 @@ export const GroupsPage: React.FC<GroupsPageProps> = ({
   const { groupsPage } = catalogState.elements;
 
   return (
-    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-hidden overscroll-none">
       <InternalCatalogHeader
         onBack={() => onNavigate('#/menu')}
         onMenu={() => onNavigate('#/menu')}
@@ -454,7 +454,7 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
     clampedGroupPage < groupPages.length ? groupPages[clampedGroupPage] : null;
 
   return (
-    <div className="flex flex-col justify-between h-full w-full pb-4 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full pb-4 relative z-10 text-right overflow-hidden overscroll-none">
       <InternalCatalogHeader
         onBack={() => onNavigate('#/groups/1')}
         onMenu={() => onNavigate('#/menu')}
@@ -624,7 +624,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
     isVariantSpecVisible(activeVariant, 'minOrder');
 
   return (
-    <div className="flex flex-col justify-between h-full w-full pb-3 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full pb-3 relative z-10 text-right overflow-hidden overscroll-none">
       <InternalCatalogHeader
         onBack={() => onNavigate(groupPageRoute)}
         onMenu={() => onNavigate('#/menu')}
@@ -930,7 +930,7 @@ export const AboutPage: React.FC<AboutPageProps> = ({
   const { aboutPage, logoUrl } = catalogState.elements;
 
   return (
-    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-hidden overscroll-none">
       <InternalCatalogHeader
         onBack={() => onNavigate('#/menu')}
         onMenu={() => onNavigate('#/menu')}
@@ -1043,7 +1043,7 @@ export const ContactPage: React.FC<ContactPageProps> = ({
   ];
 
   return (
-    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-y-auto overflow-x-hidden">
+    <div className="flex flex-col justify-between h-full w-full pb-5 relative z-10 text-right overflow-hidden overscroll-none">
       <InternalCatalogHeader
         onBack={() => onNavigate('#/menu')}
         onMenu={() => onNavigate('#/menu')}

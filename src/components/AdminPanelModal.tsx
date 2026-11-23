@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Plus,
@@ -22,6 +22,8 @@ import {
   MessageCircle,
   Download,
   Copy,
+  Save,
+  Loader2,
 } from 'lucide-react';
 import {
   ALL_SPEC_FIELD_KEYS,
@@ -213,8 +215,8 @@ interface AdminPanelModalProps {
   isOpen: boolean;
   onClose: () => void;
   catalogState: CatalogCustomState;
-  onUpdateState: (nextState: CatalogCustomState) => void;
-  onResetState: () => void;
+  onSaveState: (nextState: CatalogCustomState) => Promise<{ pdfUpdated: boolean }>;
+  onResetState: () => Promise<CatalogCustomState>;
   onLogout: () => void;
   onNavigateToRoute: (hash: string) => void;
 }
@@ -230,12 +232,18 @@ const PRESET_IMAGES = [
 export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   isOpen,
   onClose,
-  catalogState,
-  onUpdateState,
+  catalogState: savedCatalogState,
+  onSaveState,
   onResetState,
   onLogout,
   onNavigateToRoute,
 }) => {
+  const [catalogState, setDraftCatalogState] =
+    useState<CatalogCustomState>(savedCatalogState);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const [mainTab, setMainTab] = useState<'products' | 'pages' | 'settings'>('products');
   const [pageSubTab, setPageSubTab] = useState<
     'cover' | 'menu' | 'groups' | 'product-template' | 'about' | 'contact' | 'header'
@@ -249,12 +257,56 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   const [backupError, setBackupError] = useState<string | null>(null);
   const [backupTextInput, setBackupTextInput] = useState<string>('');
 
+  useEffect(() => {
+    if (isOpen) {
+      setDraftCatalogState(savedCatalogState);
+      setHasUnsavedChanges(false);
+      setSaveError(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const showSavedFeedback = (msg: string = 'تغییرات با موفقیت در کاتالوگ ذخیره شد') => {
+  const onUpdateState = (nextState: CatalogCustomState) => {
+    setDraftCatalogState(nextState);
+    setHasUnsavedChanges(true);
+    setSaveError(null);
+  };
+
+  const showSavedFeedback = (
+    msg: string = 'تغییرات با موفقیت در اپ و نسخه PDF ذخیره شد'
+  ) => {
     setBackupError(null);
+    setSaveError(null);
     setSavedNotice(msg);
-    setTimeout(() => setSavedNotice(null), 3000);
+    setTimeout(() => setSavedNotice(null), 4000);
+  };
+
+  const handleSaveAll = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    setSaveError(null);
+    setBackupError(null);
+    try {
+      const result = await onSaveState(catalogState);
+      setHasUnsavedChanges(false);
+      if (result.pdfUpdated) {
+        showSavedFeedback('تغییرات همزمان در اپلیکیشن و نسخه PDF ذخیره شد');
+      } else {
+        showSavedFeedback('تغییرات در اپلیکیشن ذخیره شد');
+      }
+    } catch (err: any) {
+      setSaveError(err?.message || 'خطا در ذخیره تغییرات روی اپ و نسخه PDF.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDiscardChanges = () => {
+    setDraftCatalogState(savedCatalogState);
+    setHasUnsavedChanges(false);
+    setSaveError(null);
+    showSavedFeedback('تغییرات ذخیره‌نشده به آخرین نسخه ذخیره‌شده بازگردانده شد');
   };
 
   const handleExportBackup = () => {
@@ -287,7 +339,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
           setEditingProductId(null);
           setBackupError(null);
           showSavedFeedback(
-            `بکاپ با موفقیت وارد شد (${toPersianDigits(restoredState.products.length)} محصول بازیابی شد)`
+            `بکاپ بارگذاری شد (${toPersianDigits(restoredState.products.length)} محصول) — برای اعمال روی اپ و PDF دکمه «ذخیره» را بزنید`
           );
         } catch (err: any) {
           setBackupError(err?.message || 'فایل بکاپ انتخاب‌شده معتبر نیست.');
@@ -327,7 +379,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       setBackupError(null);
       setBackupTextInput('');
       showSavedFeedback(
-        `بکاپ متنی با موفقیت اعمال شد (${toPersianDigits(restoredState.products.length)} محصول بازیابی شد)`
+        `بکاپ متنی بارگذاری شد (${toPersianDigits(restoredState.products.length)} محصول) — برای اعمال نهایی «ذخیره» را بزنید`
       );
     } catch (err: any) {
       setBackupError(err?.message || 'متن بکاپ واردشده معتبر نیست.');
@@ -340,7 +392,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         onLoaded(reader.result);
-        showSavedFeedback('تصویر جدید بارگذاری و جایگزین شد');
+        showSavedFeedback('تصویر جدید بارگذاری شد — برای اعمال در اپ و PDF دکمه «ذخیره» را بزنید');
       }
     };
     reader.readAsDataURL(file);
@@ -368,7 +420,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     };
     onUpdateState(nextState);
     setEditingProductId(created.id);
-    showSavedFeedback(`محصول جدید در دسته «${created.groupTitle}» اضافه شد`);
+    showSavedFeedback(`محصول جدید در دسته «${created.groupTitle}» اضافه شد — برای اعمال نهایی «ذخیره» را بزنید`);
   };
 
   const handleDeleteProduct = (productId: string, productName: string) => {
@@ -380,7 +432,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     if (editingProductId === productId) {
       setEditingProductId(null);
     }
-    showSavedFeedback(`محصول «${productName}» حذف شد`);
+    showSavedFeedback(`محصول «${productName}» حذف شد — برای اعمال نهایی «ذخیره» را بزنید`);
   };
 
   const handleUpdateProduct = (updated: CatalogProduct) => {
@@ -441,6 +493,28 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                 {backupError}
               </span>
             )}
+
+            {/* Quick Header Save Button (Applies to both App & PDF) */}
+            <button
+              type="button"
+              onClick={() => void handleSaveAll()}
+              disabled={isSaving}
+              title="ذخیره تغییرات و بروزرسانی همزمان اپلیکیشن و فایل PDF قابل کلیک"
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer ${
+                isSaving
+                  ? 'bg-[#78350F] text-white/90 cursor-wait'
+                  : hasUnsavedChanges
+                  ? 'bg-[#15803D] hover:bg-[#166534] text-white ring-2 ring-[#86EFAC]'
+                  : 'bg-[#92400E] hover:bg-[#78350F] text-white'
+              }`}
+            >
+              {isSaving ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Save className="w-3.5 h-3.5" />
+              )}
+              <span>{isSaving ? 'در حال ذخیره…' : 'ذخیره'}</span>
+            </button>
 
             {/* Quick Header Backup Export Button */}
             <button
@@ -3188,12 +3262,20 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      onResetState();
-                      setEditingProductId(null);
-                      showSavedFeedback('کاتالوگ به حالت پیش‌فرض بازنشانی شد');
+                    disabled={isSaving}
+                    onClick={async () => {
+                      setIsSaving(true);
+                      try {
+                        const defaults = await onResetState();
+                        setDraftCatalogState(defaults);
+                        setHasUnsavedChanges(false);
+                        setEditingProductId(null);
+                        showSavedFeedback('کاتالوگ و نسخه PDF به حالت پیش‌فرض بازنشانی شد');
+                      } finally {
+                        setIsSaving(false);
+                      }
                     }}
-                    className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+                    className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
                   >
                     <RotateCcw className="w-4 h-4" />
                     <span>بازنشانی به تنظیمات پیش‌فرض</span>
@@ -3202,6 +3284,65 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
               </div>
             </div>
           )}
+        </div>
+
+        {/* Sticky Bottom Save Bar: Simultaneously updates Web App and Clickable PDF */}
+        <div className="px-5 py-3 bg-white border-t border-[#ECE6D8] flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+          <div className="flex items-center gap-2 text-xs">
+            {saveError ? (
+              <span className="font-bold text-red-700">{saveError}</span>
+            ) : isSaving ? (
+              <span className="font-bold text-[#92400E] flex items-center gap-1.5">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                <span>در حال اعمال تغییرات روی اپ و بازسازی نسخه PDF قابل کلیک…</span>
+              </span>
+            ) : hasUnsavedChanges ? (
+              <span className="font-bold text-[#B45309] flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-[#D97706] animate-pulse shrink-0" />
+                <span>
+                  تغییرات ذخیره‌نشده دارید — با زدن «ذخیره تغییرات» همزمان روی اپ و PDF اعمال می‌شود.
+                </span>
+              </span>
+            ) : (
+              <span className="font-semibold text-[#15803D] flex items-center gap-1.5">
+                <Check className="w-4 h-4 shrink-0" />
+                <span>تمامی تغییرات در اپ و نسخه PDF همگام‌سازی و ذخیره شده است.</span>
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {hasUnsavedChanges && !isSaving && (
+              <button
+                type="button"
+                onClick={handleDiscardChanges}
+                className="px-3.5 py-2 rounded-xl bg-[#F5F2EB] hover:bg-[#E7E0D2] border border-[#D8CFC0] text-xs font-bold text-[#57534E] cursor-pointer transition-colors"
+              >
+                لغو تغییرات
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleSaveAll()}
+              disabled={isSaving}
+              className={`px-5 py-2 rounded-xl text-xs sm:text-sm font-extrabold flex items-center gap-2 shadow-sm transition-all cursor-pointer ${
+                isSaving
+                  ? 'bg-[#78350F] text-white/90 cursor-wait'
+                  : hasUnsavedChanges
+                  ? 'bg-[#15803D] hover:bg-[#166534] text-white'
+                  : 'bg-[#92400E] hover:bg-[#78350F] text-white'
+              }`}
+            >
+              {isSaving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              <span>
+                {isSaving ? 'در حال ذخیره در اپ و PDF…' : 'ذخیره تغییرات (اپ و PDF)'}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

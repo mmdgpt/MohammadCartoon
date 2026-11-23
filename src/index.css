@@ -5,11 +5,27 @@
     font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif;
   }
 
+  html:not(.print-preview-mode),
+  body:not(.print-preview-mode) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+
   body {
     font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif;
     background-color: #EFECE4;
     color: #1C1917;
-    overflow-x: hidden;
+  }
+
+  html:not(.print-preview-mode) #root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
   }
 }
 
@@ -108,11 +124,18 @@
 
   #printroot {
     display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #printroot > * + * {
+    margin-top: 0 !important;
   }
 
   .pp {
     width: 486px !important;
     height: 864px !important;
+    margin: 0 !important;
     aspect-ratio: 9 / 16 !important;
     break-after: page;
     page-break-after: always;
