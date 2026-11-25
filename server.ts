@@ -1,9 +1,11 @@
 import express from 'express';
+import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
+import { WebSocketServer, WebSocket } from 'ws';
 import {
   NonFullScreenPageMode,
   PDFArray,
@@ -15,6 +17,19 @@ import {
   buildOfflineCatalogHtml,
   warmOfflineBundleShell,
 } from './server/offlineHtmlBuilder.ts';
+import {
+  CatalogSnapshotRecord,
+  changeAdminPassword,
+  getAdminAuthStatus,
+  getCatalogSnapshot,
+  initCatalogDb,
+  resetCatalogSnapshot,
+  revokeAdminBearerToken,
+  saveCatalogSnapshot,
+  setupInitialAdmin,
+  validateAdminBearerToken,
+  verifyAdminLogin,
+} from './server/catalogDb.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,24 +38,70 @@ const require = createRequire(import.meta.url);
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
 const PDF_FILE_PATH = path.join(PUBLIC_DIR, 'mohammad-carton-catalog.pdf');
-const STATE_FILE_PATH = path.join(PUBLIC_DIR, 'catalog-state.json');
+const HTML_FILE_PATH = path.join(PUBLIC_DIR, 'mohammad-carton-catalog.html');
 const STORAGE_KEY = 'mohammad_carton_catalog_state_v1';
 
-let currentCatalogState: unknown = null;
-try {
-  if (fs.existsSync(STATE_FILE_PATH)) {
-    currentCatalogState = JSON.parse(fs.readFileSync(STATE_FILE_PATH, 'utf-8'));
-  }
-} catch {
-  currentCatalogState = null;
-}
+// Initialize SQLite database (auto-migrating any legacy catalog-state.json)
+const initialSnapshot = initCatalogDb();
 
 let pdfDirty = false;
 let isGeneratingPdf = false;
-let lastGeneratedAt = Date.now();
+let pdfSyncedVersion = 0;
+let lastGeneratedAt = initialSnapshot.updatedAt;
 let lastPdfError: string | null = null;
 let activePdfPromise: Promise<void> | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Version-tagged offline HTML cache so downloads are instant and 100% synced with DB
+let cachedOfflineHtml: { version: number; html: string } | null = null;
+let activeHtmlPromise: Promise<string> | null = null;
+
+// Real-time connected clients (WebSocket + SSE fallback)
+const wsClients = new Set<WebSocket>();
+const sseClients = new Set<express.Response>();
+
+// Lightweight in-memory brute-force rate limiter for admin login/setup
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const MAX_AUTH_ATTEMPTS = 20;
+
+function checkAuthRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = authAttempts.get(ip);
+  if (!entry || entry.resetAt < now) {
+    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= MAX_AUTH_ATTEMPTS;
+}
+
+function broadcastCatalogUpdate(snapshot: CatalogSnapshotRecord): void {
+  const payload = JSON.stringify({
+    type: 'catalog:updated',
+    version: snapshot.version,
+    updatedAt: snapshot.updatedAt,
+    productCount: snapshot.productCount,
+  });
+
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {
+        // ignore broken socket
+      }
+    }
+  }
+
+  for (const res of sseClients) {
+    try {
+      res.write(`event: catalog-updated\ndata: ${payload}\n\n`);
+    } catch {
+      sseClients.delete(res);
+    }
+  }
+}
 
 // Keep a reusable headless Chromium instance for fast PDF regeneration
 let sharedBrowserPromise: Promise<any> | null = null;
@@ -112,6 +173,40 @@ async function applyCatalogOnlySinglePagePdfSettings(
   return Buffer.from(savedBytes);
 }
 
+async function ensureFreshOfflineHtml(
+  snapshotOverride?: CatalogSnapshotRecord
+): Promise<string> {
+  const snapshot = snapshotOverride || getCatalogSnapshot();
+  if (cachedOfflineHtml && cachedOfflineHtml.version === snapshot.version) {
+    return cachedOfflineHtml.html;
+  }
+
+  if (activeHtmlPromise) {
+    await activeHtmlPromise;
+    const latest = getCatalogSnapshot();
+    if (cachedOfflineHtml && cachedOfflineHtml.version === latest.version) {
+      return cachedOfflineHtml.html;
+    }
+  }
+
+  activeHtmlPromise = (async () => {
+    const current = getCatalogSnapshot();
+    const html = await buildOfflineCatalogHtml(current.catalogState);
+    cachedOfflineHtml = { version: current.version, html };
+    try {
+      fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+      fs.writeFileSync(HTML_FILE_PATH, html, 'utf-8');
+    } catch {
+      // ignore disk write issues; in-memory cache still serves the fresh file
+    }
+    return html;
+  })().finally(() => {
+    activeHtmlPromise = null;
+  });
+
+  return activeHtmlPromise;
+}
+
 async function rebuildClickablePdfNow(): Promise<void> {
   if (activePdfPromise) {
     return activePdfPromise;
@@ -122,7 +217,7 @@ async function rebuildClickablePdfNow(): Promise<void> {
       pdfDirty = false;
       isGeneratingPdf = true;
       lastPdfError = null;
-      const snapshotState = currentCatalogState;
+      const snapshot = getCatalogSnapshot();
 
       let context: any = null;
       try {
@@ -131,7 +226,7 @@ async function rebuildClickablePdfNow(): Promise<void> {
           viewport: { width: 486, height: 864 },
         });
 
-        // Inject the exact latest Admin Panel catalogState into localStorage before the print page loads
+        // Inject exact authoritative SQLite catalog snapshot before print page loads
         await context.addInitScript(
           ({ key, stateJson }: { key: string; stateJson: string | null }) => {
             try {
@@ -146,7 +241,9 @@ async function rebuildClickablePdfNow(): Promise<void> {
           },
           {
             key: STORAGE_KEY,
-            stateJson: snapshotState ? JSON.stringify(snapshotState) : null,
+            stateJson: snapshot.catalogState
+              ? JSON.stringify(snapshot.catalogState)
+              : null,
           }
         );
 
@@ -174,6 +271,7 @@ async function rebuildClickablePdfNow(): Promise<void> {
 
         fs.mkdirSync(PUBLIC_DIR, { recursive: true });
         fs.writeFileSync(PDF_FILE_PATH, lockedPdfBuffer);
+        pdfSyncedVersion = snapshot.version;
         lastGeneratedAt = Date.now();
       } catch (err: any) {
         lastPdfError = err?.message || 'PDF regeneration failed';
@@ -208,90 +306,279 @@ async function ensureFreshPdf(): Promise<void> {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
+  const snapshot = getCatalogSnapshot();
+  if (!fs.existsSync(PDF_FILE_PATH) || pdfSyncedVersion !== snapshot.version) {
+    pdfDirty = true;
+  }
   while (pdfDirty || activePdfPromise) {
     await rebuildClickablePdfNow();
   }
 }
 
+function requireAdminAuth(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  const session = validateAdminBearerToken(req.headers.authorization);
+  if (!session) {
+    res.status(401).json({
+      ok: false,
+      error: 'احراز هویت مدیر انجام نشده یا نشست منقضی شده است. لطفاً مجدداً وارد شوید.',
+    });
+    return;
+  }
+  (req as express.Request & { adminUser?: string }).adminUser = session.username;
+  next();
+}
+
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '25mb' }));
 
-  // 1. Get current server-persisted catalog state & PDF build status
-  app.get('/api/catalog-state', (_req, res) => {
+  // Health check endpoint for server/container deployments
+  app.get('/api/health', (_req, res) => {
+    const snap = getCatalogSnapshot();
     res.setHeader('Cache-Control', 'no-store');
     res.json({
-      catalogState: currentCatalogState,
-      isGeneratingPdf: isGeneratingPdf || pdfDirty,
-      lastGeneratedAt,
-    });
-  });
-
-  // 2. Update catalog state from Admin Panel and trigger immediate PDF update
-  app.post('/api/catalog-state', async (req, res) => {
-    const nextState = req.body?.catalogState;
-    const rebuildNow = Boolean(req.body?.rebuildNow);
-    if (nextState && typeof nextState === 'object') {
-      currentCatalogState = nextState;
-      try {
-        fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-        fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(nextState), 'utf-8');
-      } catch {
-        // ignore disk write issues
-      }
-      if (rebuildNow) {
-        pdfDirty = true;
-        await ensureFreshPdf();
-        res.json({
-          ok: true,
-          pdfUpdated: !lastPdfError,
-          isGeneratingPdf: false,
-          lastGeneratedAt,
-          pdfError: lastPdfError,
-        });
-        return;
-      }
-      schedulePdfRegeneration(250);
-    }
-    res.json({
       ok: true,
-      pdfUpdated: false,
-      isGeneratingPdf: isGeneratingPdf || pdfDirty,
-      lastGeneratedAt,
+      version: snap.version,
+      updatedAt: snap.updatedAt,
+      productCount: snap.productCount,
+      connectedClients: wsClients.size + sseClients.size,
     });
   });
 
-  // 3. Reset catalog state to defaults and regenerate default PDF
-  app.delete('/api/catalog-state', async (req, res) => {
-    const rebuildNow = req.query.rebuildNow === '1';
-    currentCatalogState = null;
-    try {
-      if (fs.existsSync(STATE_FILE_PATH)) {
-        fs.unlinkSync(STATE_FILE_PATH);
-      }
-    } catch {
-      // ignore
-    }
-    if (rebuildNow) {
-      pdfDirty = true;
-      await ensureFreshPdf();
-      res.json({
-        ok: true,
-        pdfUpdated: !lastPdfError,
-        lastGeneratedAt,
+  // ==================== ADMIN AUTH ENDPOINTS ====================
+
+  app.get('/api/admin/status', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(getAdminAuthStatus());
+  });
+
+  app.post('/api/admin/setup', (req, res) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!checkAuthRateLimit(ip)) {
+      res.status(429).json({
+        ok: false,
+        error: 'تعداد تلاش‌ها بیش از حد مجاز است. لطفاً چند دقیقه دیگر دوباره تلاش کنید.',
       });
       return;
     }
-    schedulePdfRegeneration(100);
-    res.json({ ok: true, lastGeneratedAt });
+
+    const username = typeof req.body?.username === 'string' ? req.body.username : 'admin';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    try {
+      const session = setupInitialAdmin(username, password);
+      res.json({
+        ok: true,
+        token: session.token,
+        username: session.username,
+        expiresAt: session.expiresAt,
+      });
+    } catch (err: any) {
+      res.status(400).json({
+        ok: false,
+        error: err?.message || 'خطا در تنظیم رمز عبور مدیر',
+      });
+    }
   });
 
-  // 4. Serve always-up-to-date interactive clickable PDF (SinglePage, chrome-free, scroll-locked)
+  app.post('/api/admin/login', (req, res) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!checkAuthRateLimit(ip)) {
+      res.status(429).json({
+        ok: false,
+        error: 'تعداد تلاش‌های ورود بیش از حد مجاز است. لطفاً چند دقیقه صبر کنید.',
+      });
+      return;
+    }
+
+    const username = typeof req.body?.username === 'string' ? req.body.username : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const session = verifyAdminLogin(username, password);
+    if (!session) {
+      res.status(401).json({
+        ok: false,
+        error: 'نام کاربری یا رمز عبور اشتباه است.',
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      token: session.token,
+      username: session.username,
+      expiresAt: session.expiresAt,
+    });
+  });
+
+  app.post('/api/admin/logout', (req, res) => {
+    revokeAdminBearerToken(req.headers.authorization);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/admin/change-password', requireAdminAuth, (req, res) => {
+    const currentPassword =
+      typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+    const newPassword =
+      typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+    try {
+      changeAdminPassword(currentPassword, newPassword);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({
+        ok: false,
+        error: err?.message || 'خطا در تغییر رمز عبور',
+      });
+    }
+  });
+
+  // ==================== REAL-TIME CATALOG SYNC ENDPOINTS ====================
+
+  // 1. Authoritative catalog state from SQLite database (for all visitors)
+  app.get('/api/catalog-state', (_req, res) => {
+    const snapshot = getCatalogSnapshot();
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.json({
+      catalogState: snapshot.catalogState,
+      version: snapshot.version,
+      updatedAt: snapshot.updatedAt,
+      productCount: snapshot.productCount,
+      isGeneratingPdf: isGeneratingPdf || pdfDirty,
+      lastGeneratedAt: Math.max(lastGeneratedAt, snapshot.updatedAt),
+    });
+  });
+
+  // 1b. Server-Sent Events fallback stream for real-time visitor updates
+  app.get('/api/catalog-events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const snap = getCatalogSnapshot();
+    res.write(
+      `event: catalog-hello\ndata: ${JSON.stringify({
+        type: 'catalog:hello',
+        version: snap.version,
+        updatedAt: snap.updatedAt,
+      })}\n\n`
+    );
+
+    sseClients.add(res);
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(keepAlive);
+        sseClients.delete(res);
+      }
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      sseClients.delete(res);
+    });
+  });
+
+  // 2. Save catalog state to SQLite, rebuild PDF & Offline HTML, and broadcast to ALL visitors
+  app.post('/api/catalog-state', requireAdminAuth, async (req, res) => {
+    const nextState = req.body?.catalogState;
+    const rebuildNow = req.body?.rebuildNow !== false;
+    if (!nextState || typeof nextState !== 'object' || Array.isArray(nextState)) {
+      res.status(400).json({ ok: false, error: 'ساختار اطلاعات کاتالوگ نامعتبر است.' });
+      return;
+    }
+
+    try {
+      const snapshot = saveCatalogSnapshot(nextState);
+      cachedOfflineHtml = null;
+
+      // Refresh Offline HTML immediately (<100ms once shell is warm)
+      let htmlUpdated = false;
+      try {
+        await ensureFreshOfflineHtml(snapshot);
+        htmlUpdated = true;
+      } catch (err) {
+        console.error('Offline HTML sync error:', err);
+      }
+
+      // Broadcast real-time update to ALL connected visitors immediately (<200ms)
+      broadcastCatalogUpdate(snapshot);
+
+      if (rebuildNow) {
+        pdfDirty = true;
+        await ensureFreshPdf();
+        // Broadcast again once PDF finishes regenerating so PDF download links refresh cleanly
+        broadcastCatalogUpdate(snapshot);
+      } else {
+        schedulePdfRegeneration(150);
+      }
+
+      res.json({
+        ok: true,
+        version: snapshot.version,
+        updatedAt: snapshot.updatedAt,
+        pdfUpdated: rebuildNow ? !lastPdfError : false,
+        htmlUpdated,
+        isGeneratingPdf: isGeneratingPdf || pdfDirty,
+        lastGeneratedAt: snapshot.updatedAt,
+        pdfError: lastPdfError,
+      });
+    } catch (err: any) {
+      console.error('Catalog save error:', err);
+      res.status(500).json({
+        ok: false,
+        error: err?.message || 'خطا در ذخیره اطلاعات در دیتابیس سرور',
+      });
+    }
+  });
+
+  // 3. Reset catalog state in SQLite to defaults, rebuild PDF & Offline HTML, and broadcast
+  app.delete('/api/catalog-state', requireAdminAuth, async (req, res) => {
+    const rebuildNow = req.query.rebuildNow === '1';
+    try {
+      const snapshot = resetCatalogSnapshot();
+      cachedOfflineHtml = null;
+
+      let htmlUpdated = false;
+      try {
+        await ensureFreshOfflineHtml(snapshot);
+        htmlUpdated = true;
+      } catch (err) {
+        console.error('Offline HTML reset sync error:', err);
+      }
+
+      if (rebuildNow) {
+        pdfDirty = true;
+        await ensureFreshPdf();
+      } else {
+        schedulePdfRegeneration(100);
+      }
+
+      broadcastCatalogUpdate(snapshot);
+
+      res.json({
+        ok: true,
+        version: snapshot.version,
+        updatedAt: snapshot.updatedAt,
+        pdfUpdated: rebuildNow ? !lastPdfError : false,
+        htmlUpdated,
+        lastGeneratedAt: snapshot.updatedAt,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        ok: false,
+        error: err?.message || 'خطا در بازنشانی دیتابیس کاتالوگ',
+      });
+    }
+  });
+
+  // 4. Serve always-up-to-date interactive clickable PDF (SinglePage, chrome-free, synced with DB)
   const handleServePdf = async (req: express.Request, res: express.Response) => {
     try {
-      if (!fs.existsSync(PDF_FILE_PATH)) {
-        pdfDirty = true;
-      }
       await ensureFreshPdf();
     } catch {
       // fallback to existing PDF on disk if any
@@ -322,13 +609,13 @@ async function startServer() {
   app.get('/mohammad-carton-catalog.pdf', handleServePdf);
   app.get('/api/catalog.pdf', handleServePdf);
 
-  // 4b. Serve always-up-to-date self-contained single-file offline interactive HTML catalog
+  // 4b. Serve always-up-to-date self-contained single-file offline interactive HTML (synced with DB)
   const handleServeOfflineHtml = async (
     req: express.Request,
     res: express.Response
   ) => {
     try {
-      const html = await buildOfflineCatalogHtml(currentCatalogState);
+      const html = await ensureFreshOfflineHtml();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader(
         'Cache-Control',
@@ -363,21 +650,73 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(PUBLIC_DIR));
+    app.use(
+      express.static(PUBLIC_DIR, {
+        index: false,
+      })
+    );
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  // Create HTTP server and attach WebSocket server on the same port (/ws/catalog)
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server, path: '/ws/catalog' });
+
+  wss.on('connection', (ws) => {
+    wsClients.add(ws);
+    const snap = getCatalogSnapshot();
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'catalog:hello',
+          version: snap.version,
+          updatedAt: snap.updatedAt,
+          productCount: snap.productCount,
+        })
+      );
+    } catch {
+      // ignore initial send failure
+    }
+
+    ws.on('close', () => {
+      wsClients.delete(ws);
+    });
+    ws.on('error', () => {
+      wsClients.delete(ws);
+    });
+  });
+
+  // Periodic heartbeat to clear stale sockets cleanly
+  const wsPingTimer = setInterval(() => {
+    for (const client of wsClients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.ping();
+        } catch {
+          wsClients.delete(client);
+        }
+      } else {
+        wsClients.delete(client);
+      }
+    }
+  }, 30000);
+  wsPingTimer.unref();
+
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
     warmOfflineBundleShell();
-    // Ensure existing PDF on disk is upgraded with SinglePage scroll-lock + chrome-free ViewerPreferences
+
+    // Ensure PDF on disk matches current DB version and has SinglePage lock
     try {
+      const snap = getCatalogSnapshot();
       if (fs.existsSync(PDF_FILE_PATH)) {
         const existing = fs.readFileSync(PDF_FILE_PATH);
-        if (!existing.includes(Buffer.from('/SinglePage'))) {
+        if (existing.includes(Buffer.from('/SinglePage'))) {
+          pdfSyncedVersion = snap.version;
+        } else {
           schedulePdfRegeneration(500);
         }
       } else {

@@ -101,32 +101,71 @@ const FieldVisibilitySwitch: React.FC<{
 interface AdminLoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  expectedPassword?: string;
-  onLoginSuccess: () => void;
+  onLoginSuccess: (token: string) => void;
 }
 
 export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   isOpen,
   onClose,
-  expectedPassword = '1234',
   onLoginSuccess,
 }) => {
   const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState(expectedPassword);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [requiresSetup, setRequiresSetup] = useState<boolean>(false);
+  const [statusLoading, setStatusLoading] = useState<boolean>(false);
+  const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setError('');
+    setPassword('');
+    setConfirmPassword('');
+    setStatusLoading(true);
+    void fetch('/api/admin/status', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data.requiresSetup === 'boolean') {
+          setRequiresSetup(data.requiresSetup);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setStatusLoading(false));
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (
-      username.trim().toLowerCase() === 'admin' &&
-      (password === expectedPassword || password === '1234')
-    ) {
-      setError('');
-      onLoginSuccess();
-    } else {
-      setError('نام کاربری یا رمز عبور اشتباه است (پیش‌فرض: admin / 1234)');
+    if (submitting) return;
+    setError('');
+
+    if (requiresSetup && password !== confirmPassword) {
+      setError('رمز عبور و تکرار آن یکسان نیستند.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const endpoint = requiresSetup ? '/api/admin/setup' : '/api/admin/login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok || typeof data.token !== 'string') {
+        setError(data?.error || 'نام کاربری یا رمز عبور اشتباه است.');
+        return;
+      }
+      setPassword('');
+      setConfirmPassword('');
+      onLoginSuccess(data.token);
+    } catch {
+      setError('خطا در برقراری ارتباط با سرور. لطفاً دوباره تلاش کنید.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -135,7 +174,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="ورود به پنل ادمین"
+      aria-label={requiresSetup ? 'تنظیم رمز مدیریت' : 'ورود به پنل ادمین'}
       onClick={onClose}
     >
       <div
@@ -147,7 +186,9 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           <div className="flex items-center gap-2">
             <Lock className="w-5 h-5 text-[#B45309]" />
             <h2 className="text-base font-extrabold text-[#1C1917]">
-              ورود به پنل مدیریت کاتالوگ
+              {requiresSetup
+                ? 'تنظیم اولیه رمز مدیریت سرور'
+                : 'ورود به پنل مدیریت کاتالوگ'}
             </h2>
           </div>
           <button
@@ -160,7 +201,13 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={(e) => void handleSubmit(e)} className="p-5 space-y-4">
+          {requiresSetup && (
+            <p className="text-[11px] leading-5 text-[#78350F] bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl font-medium">
+              برای اولین بار یک نام کاربری و رمز عبور امن برای مدیر کاتالوگ تعیین کنید. این رمز به‌صورت رمزنگاری‌شده در دیتابیس سرور ذخیره می‌شود.
+            </p>
+          )}
+
           <div>
             <label className="block text-xs font-bold text-[#44403C] mb-1.5">
               نام کاربری
@@ -171,13 +218,15 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               onChange={(e) => setUsername(e.target.value)}
               aria-label="نام کاربری ادمین"
               dir="ltr"
+              required
+              autoComplete="username"
               className="w-full bg-white border border-[#D8CFC0] focus:border-[#B45309] rounded-xl px-3.5 py-2.5 text-xs font-mono-tech text-[#1C1917] outline-none"
             />
           </div>
 
           <div>
             <label className="block text-xs font-bold text-[#44403C] mb-1.5">
-              رمز عبور
+              {requiresSetup ? 'رمز عبور جدید مدیر (حداقل ۴ کاراکتر)' : 'رمز عبور'}
             </label>
             <input
               type="password"
@@ -185,12 +234,31 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               onChange={(e) => setPassword(e.target.value)}
               aria-label="رمز عبور ادمین"
               dir="ltr"
+              required
+              minLength={4}
+              autoComplete={requiresSetup ? 'new-password' : 'current-password'}
               className="w-full bg-white border border-[#D8CFC0] focus:border-[#B45309] rounded-xl px-3.5 py-2.5 text-xs font-mono-tech text-[#1C1917] outline-none"
             />
-            <p className="text-[11px] text-[#78716C] mt-1.5">
-              اطلاعات ورود پیش‌فرض آماده است: نام کاربری <span className="font-mono-tech font-bold">admin</span> و رمز <span className="font-mono-tech font-bold">1234</span>
-            </p>
           </div>
+
+          {requiresSetup && (
+            <div>
+              <label className="block text-xs font-bold text-[#44403C] mb-1.5">
+                تکرار رمز عبور
+              </label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                aria-label="تکرار رمز عبور ادمین"
+                dir="ltr"
+                required
+                minLength={4}
+                autoComplete="new-password"
+                className="w-full bg-white border border-[#D8CFC0] focus:border-[#B45309] rounded-xl px-3.5 py-2.5 text-xs font-mono-tech text-[#1C1917] outline-none"
+              />
+            </div>
+          )}
 
           {error && (
             <p role="alert" className="text-xs font-bold text-red-700 bg-red-50 px-3 py-2 rounded-xl">
@@ -200,10 +268,17 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
 
           <button
             type="submit"
-            className="w-full py-3 px-4 bg-[#92400E] hover:bg-[#78350F] text-white text-xs sm:text-sm font-extrabold rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+            disabled={submitting || statusLoading}
+            className="w-full py-3 px-4 bg-[#92400E] hover:bg-[#78350F] disabled:opacity-60 text-white text-xs sm:text-sm font-extrabold rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
           >
-            <UserCheck className="w-4 h-4" />
-            <span>ورود به پنل ادمین</span>
+            {submitting || statusLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <UserCheck className="w-4 h-4" />
+            )}
+            <span>
+              {requiresSetup ? 'ثبت رمز مدیر و ورود به پنل' : 'ورود به پنل ادمین'}
+            </span>
           </button>
         </form>
       </div>
@@ -215,7 +290,10 @@ interface AdminPanelModalProps {
   isOpen: boolean;
   onClose: () => void;
   catalogState: CatalogCustomState;
-  onSaveState: (nextState: CatalogCustomState) => Promise<{ pdfUpdated: boolean }>;
+  adminToken: string | null;
+  onSaveState: (
+    nextState: CatalogCustomState
+  ) => Promise<{ pdfUpdated: boolean; htmlUpdated?: boolean }>;
   onResetState: () => Promise<CatalogCustomState>;
   onLogout: () => void;
   onNavigateToRoute: (hash: string) => void;
@@ -233,6 +311,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   isOpen,
   onClose,
   catalogState: savedCatalogState,
+  adminToken,
   onSaveState,
   onResetState,
   onLogout,
@@ -243,6 +322,10 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [currentPwdInput, setCurrentPwdInput] = useState('');
+  const [newPwdInput, setNewPwdInput] = useState('');
+  const [pwdUpdating, setPwdUpdating] = useState(false);
+  const [pwdMessage, setPwdMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const [mainTab, setMainTab] = useState<'products' | 'pages' | 'settings'>('products');
   const [pageSubTab, setPageSubTab] = useState<
@@ -262,6 +345,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       setDraftCatalogState(savedCatalogState);
       setHasUnsavedChanges(false);
       setSaveError(null);
+      setPwdMessage(null);
     }
   }, [isOpen]);
 
@@ -291,14 +375,56 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       const result = await onSaveState(catalogState);
       setHasUnsavedChanges(false);
       if (result.pdfUpdated) {
-        showSavedFeedback('تغییرات همزمان در اپلیکیشن و نسخه PDF ذخیره شد');
+        showSavedFeedback(
+          'تغییرات در دیتابیس ذخیره و برای همه کاربران، PDF و HTML آفلاین به‌روزرسانی شد'
+        );
       } else {
-        showSavedFeedback('تغییرات در اپلیکیشن ذخیره شد');
+        showSavedFeedback('تغییرات در دیتابیس سرور و فایل HTML ذخیره شد');
       }
     } catch (err: any) {
-      setSaveError(err?.message || 'خطا در ذخیره تغییرات روی اپ و نسخه PDF.');
+      setSaveError(err?.message || 'خطا در ذخیره تغییرات در دیتابیس و خروجی‌ها.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleChangeAdminPassword = async () => {
+    if (!adminToken || pwdUpdating) return;
+    setPwdUpdating(true);
+    setPwdMessage(null);
+    try {
+      const res = await fetch('/api/admin/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          currentPassword: currentPwdInput,
+          newPassword: newPwdInput,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        setPwdMessage({
+          type: 'err',
+          text: data?.error || 'خطا در تغییر رمز عبور.',
+        });
+        return;
+      }
+      setCurrentPwdInput('');
+      setNewPwdInput('');
+      setPwdMessage({
+        type: 'ok',
+        text: 'رمز عبور مدیر با موفقیت در دیتابیس سرور تغییر یافت.',
+      });
+    } catch {
+      setPwdMessage({
+        type: 'err',
+        text: 'خطا در ارتباط با سرور برای تغییر رمز عبور.',
+      });
+    } finally {
+      setPwdUpdating(false);
     }
   };
 
@@ -3236,19 +3362,57 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                   تنظیمات امنیتی و بازنشانی به حالت پیش‌فرض کارخانه
                 </h3>
 
-                <div className="max-w-sm">
-                  <label className="block text-xs font-bold text-[#44403C] mb-1">
-                    تغییر رمز عبور پنل ادمین
-                  </label>
-                  <input
-                    type="text"
-                    dir="ltr"
-                    value={catalogState.adminPassword || '1234'}
-                    onChange={(e) =>
-                      onUpdateState({ ...catalogState, adminPassword: e.target.value })
-                    }
-                    className="w-full bg-[#FAF8F3] border border-[#D8CFC0] rounded-xl px-3.5 py-2 text-xs font-mono-tech"
-                  />
+                <div className="max-w-md space-y-3">
+                  <div className="text-xs font-extrabold text-[#44403C]">
+                    تغییر رمز عبور پنل ادمین (ذخیره رمزنگاری‌شده روی دیتابیس سرور)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-bold text-[#57534E] mb-1">
+                        رمز عبور فعلی
+                      </label>
+                      <input
+                        type="password"
+                        dir="ltr"
+                        value={currentPwdInput}
+                        onChange={(e) => setCurrentPwdInput(e.target.value)}
+                        autoComplete="current-password"
+                        className="w-full bg-[#FAF8F3] border border-[#D8CFC0] rounded-xl px-3.5 py-2 text-xs font-mono-tech"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-[#57534E] mb-1">
+                        رمز عبور جدید (حداقل ۴ کاراکتر)
+                      </label>
+                      <input
+                        type="password"
+                        dir="ltr"
+                        value={newPwdInput}
+                        onChange={(e) => setNewPwdInput(e.target.value)}
+                        autoComplete="new-password"
+                        className="w-full bg-[#FAF8F3] border border-[#D8CFC0] rounded-xl px-3.5 py-2 text-xs font-mono-tech"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      disabled={pwdUpdating || !currentPwdInput || newPwdInput.length < 4}
+                      onClick={() => void handleChangeAdminPassword()}
+                      className="px-4 py-2 rounded-xl bg-[#92400E] hover:bg-[#78350F] disabled:opacity-50 text-white text-xs font-extrabold cursor-pointer transition-colors"
+                    >
+                      {pwdUpdating ? 'در حال ثبت رمز جدید…' : 'به‌روزرسانی رمز عبور'}
+                    </button>
+                    {pwdMessage && (
+                      <span
+                        className={`text-xs font-bold ${
+                          pwdMessage.type === 'ok' ? 'text-[#15803D]' : 'text-red-700'
+                        }`}
+                      >
+                        {pwdMessage.text}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="p-4 rounded-2xl bg-amber-50/70 border border-[#E5DEC9] flex flex-wrap items-center justify-between gap-3">
@@ -3306,7 +3470,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
             ) : (
               <span className="font-semibold text-[#15803D] flex items-center gap-1.5">
                 <Check className="w-4 h-4 shrink-0" />
-                <span>تمامی تغییرات در اپ و نسخه PDF همگام‌سازی و ذخیره شده است.</span>
+                <span>تمامی تغییرات در دیتابیس، نمایش کاربران، PDF و HTML آفلاین همگام‌سازی شده است.</span>
               </span>
             )}
           </div>
@@ -3339,7 +3503,9 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                 <Save className="w-4 h-4" />
               )}
               <span>
-                {isSaving ? 'در حال ذخیره در اپ و PDF…' : 'ذخیره تغییرات (اپ و PDF)'}
+                {isSaving
+                  ? 'در حال ذخیره در دیتابیس، PDF و HTML…'
+                  : 'ذخیره و همگام‌سازی (دیتابیس، PDF و HTML)'}
               </span>
             </button>
           </div>

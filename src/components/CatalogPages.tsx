@@ -494,12 +494,14 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
                 className="flex flex-col bg-white hover:bg-[#FFFDF9] border border-[#E5DEC9] hover:border-[#D97706] rounded-2xl overflow-hidden shadow-[0_4px_14px_rgba(28,25,23,0.04)] transition-all hover:-translate-y-0.5 group cursor-pointer"
               >
                 <div className="p-1.5 pb-0">
-                  <ProductDiagram
-                    diagramType={product.diagramType}
-                    customImage={cardMedia.schematicImage}
-                    compact
-                    className="h-19 group-hover:border-[#D97706]/50 transition-colors"
-                  />
+                  <div className="h-19 w-full rounded-xl overflow-hidden bg-[#F5EFE6] border border-[#EDE6D6] group-hover:border-[#D97706]/50 transition-colors">
+                    <img
+                      src={cardMedia.image}
+                      alt={product.name}
+                      loading="lazy"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  </div>
                 </div>
 
               <div className="px-2.5 py-1.5 flex-1 flex flex-col justify-between text-right">
@@ -532,7 +534,7 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
             type="button"
             disabled={!prevEntry}
             onClick={() => prevEntry && onNavigate(prevEntry.routeHash)}
-            className={`w-[217px] h-[40px] shrink-0 rounded-xl border border-[#92400E] bg-[#92400E] text-white text-center font-bold flex items-center justify-center gap-1.5 transition-colors ${
+            className={`flex-1 h-[40px] min-w-0 rounded-xl border border-[#92400E] bg-[#92400E] text-white text-center font-bold flex items-center justify-center gap-1.5 transition-colors ${
               prevEntry
                 ? 'hover:bg-[#78350F] cursor-pointer shadow-2xs'
                 : 'cursor-not-allowed'
@@ -546,7 +548,7 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
             type="button"
             disabled={!nextEntry}
             onClick={() => nextEntry && onNavigate(nextEntry.routeHash)}
-            className={`w-[217px] h-[40px] shrink-0 rounded-xl border border-[#92400E] bg-[#92400E] text-white text-center font-bold flex items-center justify-center gap-1.5 transition-colors ${
+            className={`flex-1 h-[40px] min-w-0 rounded-xl border border-[#92400E] bg-[#92400E] text-white text-center font-bold flex items-center justify-center gap-1.5 transition-colors ${
               nextEntry
                 ? 'hover:bg-[#78350F] cursor-pointer shadow-2xs'
                 : 'cursor-not-allowed'
@@ -591,7 +593,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
   const [selectedVariantId, setSelectedVariantId] = useState(
     visibleVariants[0]?.id || product.variants[0]?.id || ''
   );
-  const [visualMode, setVisualMode] = useState<'diagram' | 'photo'>('diagram');
+  const [visualMode, setVisualMode] = useState<'diagram' | 'photo'>('photo');
 
   const activeVariant =
     visibleVariants.find((v) => v.id === selectedVariantId) || visibleVariants[0];
@@ -640,18 +642,6 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
             <div className="flex items-center gap-1 bg-[#F5F2EB] p-1 rounded-xl border border-[#E5DEC9]">
               <button
                 type="button"
-                onClick={() => setVisualMode('diagram')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap ${
-                  visualMode === 'diagram'
-                    ? 'bg-[#92400E] text-white'
-                    : 'text-[#57534E] hover:text-[#1C1917]'
-                }`}
-              >
-                <Layers className="w-3 h-3" />
-                <span>{productPage.diagramTabLabel}</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => setVisualMode('photo')}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap ${
                   visualMode === 'photo'
@@ -661,6 +651,18 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
               >
                 <ImageIcon className="w-3 h-3" />
                 <span>{productPage.photoTabLabel}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisualMode('diagram')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap ${
+                  visualMode === 'diagram'
+                    ? 'bg-[#92400E] text-white'
+                    : 'text-[#57534E] hover:text-[#1C1917]'
+                }`}
+              >
+                <Layers className="w-3 h-3" />
+                <span>{productPage.diagramTabLabel}</span>
               </button>
             </div>
           </div>
@@ -829,9 +831,14 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
           </div>
         )}
 
+        {/* End scrollable/flexible product info section */}
+      </div>
+
+      {/* Bottom Thumb-Zone Action Bars (consultation + table/specs/prev/next) */}
+      <div className="px-5 pt-2 space-y-2 shrink-0">
         {/* Action Button Row 1: درخواست مشاوره در پیام‌رسان‌های فعال (واتساپ، ایتا، روبیکا) */}
         {enabledMessengers.length > 0 && (
-          <div className="pt-0.5">
+          <div>
             <div className="bg-[#FAF5EB] border border-[#D8CFC0] rounded-2xl p-1.5 flex items-center justify-between gap-1.5 shadow-2xs">
               <div className="flex items-center gap-1 px-2 py-1 text-[#92400E] text-[11px] font-extrabold whitespace-nowrap shrink-0">
                 <MessageCircle className="w-3.5 h-3.5 shrink-0" />

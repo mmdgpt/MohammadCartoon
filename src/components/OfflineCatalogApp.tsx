@@ -138,7 +138,7 @@ export default function OfflineCatalogApp() {
   return (
     <div
       dir="rtl"
-      className="h-dvh w-screen bg-[#EFECE4] text-[#1C1917] flex flex-col items-center justify-center relative overflow-hidden overscroll-none"
+      className="h-dvh w-screen bg-[#FAF8F3] sm:bg-[#EFECE4] text-[#1C1917] flex flex-col items-center justify-center relative overflow-hidden overscroll-none"
     >
       {/* Catalog-Only Centered Interactive Sheet — 9:16 Fixed-Viewport Non-Scrollable Canvas */}
       <CatalogSheetViewport routeKey={routeKey}>

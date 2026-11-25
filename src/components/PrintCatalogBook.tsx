@@ -508,13 +508,13 @@ export const PrintCatalogBook: React.FC<PrintCatalogBookProps> = ({
                             className="flex flex-col bg-white border border-[#E5DEC9] rounded-2xl overflow-hidden"
                           >
                             <div className="p-1.5 pb-0">
-                              <ProductDiagram
-                                diagramType={product.diagramType}
-                                customImage={cardMedia.schematicImage}
-                                enableHoverZoom={false}
-                                compact
-                                className="h-19"
-                              />
+                              <div className="h-19 w-full rounded-xl overflow-hidden bg-[#F5EFE6] border border-[#EDE6D6]">
+                                <img
+                                  src={cardMedia.image}
+                                  alt={product.name}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
                             </div>
 
                             <div className="px-2.5 py-1.5 flex-1 flex flex-col justify-between text-right">
@@ -594,10 +594,10 @@ export const PrintCatalogBook: React.FC<PrintCatalogBookProps> = ({
               const groupPageRoute = getProductGroupPageRoute(product.id, products);
               const groupHref = hrefFor(groupPageRoute);
               const specModalHref = hrefFor(`#/p/${product.id}?modal=spec`);
-              const photoHref =
-                target.variantIndex > 0 && activeVariant?.image
-                  ? hrefFor(`#/p/${product.id}?v=${target.variantIndex}&mode=photo`)
-                  : hrefFor(`#/p/${product.id}?mode=photo`);
+              const diagramHref =
+                target.variantIndex > 0 && activeVariant?.schematicImage
+                  ? hrefFor(`#/p/${product.id}?v=${target.variantIndex}&mode=diagram`)
+                  : hrefFor(`#/p/${product.id}?mode=diagram`);
               const messengerLinks = buildProductMessengerLinks(
                 product,
                 activeVariant?.label || product.name,
@@ -632,17 +632,6 @@ export const PrintCatalogBook: React.FC<PrintCatalogBookProps> = ({
                           <a
                             href={hrefFor(`#/p/${product.id}?v=${target.variantIndex}`)}
                             className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 whitespace-nowrap ${
-                              target.visualMode === 'diagram'
-                                ? 'bg-[#92400E] text-white'
-                                : 'text-[#57534E]'
-                            }`}
-                          >
-                            <Layers className="w-3 h-3" />
-                            <span>{productPage.diagramTabLabel}</span>
-                          </a>
-                          <a
-                            href={photoHref}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 whitespace-nowrap ${
                               target.visualMode === 'photo'
                                 ? 'bg-[#92400E] text-white'
                                 : 'text-[#57534E]'
@@ -650,6 +639,17 @@ export const PrintCatalogBook: React.FC<PrintCatalogBookProps> = ({
                           >
                             <ImageIcon className="w-3 h-3" />
                             <span>{productPage.photoTabLabel}</span>
+                          </a>
+                          <a
+                            href={diagramHref}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 whitespace-nowrap ${
+                              target.visualMode === 'diagram'
+                                ? 'bg-[#92400E] text-white'
+                                : 'text-[#57534E]'
+                            }`}
+                          >
+                            <Layers className="w-3 h-3" />
+                            <span>{productPage.diagramTabLabel}</span>
                           </a>
                         </div>
                       </div>
